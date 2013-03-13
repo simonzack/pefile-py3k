@@ -20,7 +20,7 @@ For detailed copyright information see the file COPYING in
 the root of the distribution archive.
 """
 
-__revision__ = "$LastChangedRevision: 114 $"
+__revision__ = "$LastChangedRevision: 118 $"
 __author__ = 'Ero Carrera'
 __version__ = '1.2.10-%d' % int( __revision__[21:-2] )
 __contact__ = 'ero.carrera@gmail.com'
@@ -1052,9 +1052,16 @@ class SectionStructure(Structure):
             size = self.Misc_VirtualSize
         else:
             size = max(self.SizeOfRawData, self.Misc_VirtualSize)
-        
+
         VirtualAddress_adj = self.pe.adjust_SectionAlignment( self.VirtualAddress, 
             self.pe.OPTIONAL_HEADER.SectionAlignment, self.pe.OPTIONAL_HEADER.FileAlignment )
+        
+        # Check if there's any further section that will start before the
+        # calculated end for the current one, if so cut the current's size
+        # to fit in the range until the next one starts.
+        for s in self.pe.sections:
+            if s.VirtualAddress > self.VirtualAddress and VirtualAddress_adj + size > s.VirtualAddress:
+                    size = s.VirtualAddress - VirtualAddress_adj
         
         return VirtualAddress_adj <= rva < VirtualAddress_adj + size
     
@@ -1782,7 +1789,8 @@ class PE:
         
         self.OPTIONAL_HEADER = self.__unpack_data__(
             self.__IMAGE_OPTIONAL_HEADER_format__,
-            self.__data__[optional_header_offset:],
+            # Read up to 256 bytes to allow creating a copy of too much data
+            self.__data__[optional_header_offset:optional_header_offset+256],
             file_offset = optional_header_offset)
         
         # According to solardesigner's findings for his
@@ -2341,8 +2349,27 @@ class PE:
             
             rva += bnd_descr.sizeof()
             
+            section = self.get_section_by_offset(rva)
+            file_offset = self.get_offset_from_rva(rva)
+            if section is None:
+                # Find the first section starting at a later offset than that specified by 'rva'
+                first_section_after_offset = min([section.PointerToRawData for section in self.sections
+                                                if section.PointerToRawData > file_offset])
+                section = self.get_section_by_offset(first_section_after_offset)
+                safety_boundary = section.PointerToRawData - file_offset
+            else:
+                safety_boundary = section.PointerToRawData + len(section.get_data()) - file_offset
+
+            if not section:
+                self.__warnings.append(
+                    'RVA of IMAGE_BOUND_IMPORT_DESCRIPTOR points to an invalid address: %x' %
+                    rva)
+                return
+                
+
             forwarder_refs = []
-            for idx in xrange(bnd_descr.NumberOfModuleForwarderRefs):
+            # 8 is the size of __IMAGE_BOUND_IMPORT_DESCRIPTOR_format__
+            for idx in xrange( min( bnd_descr.NumberOfModuleForwarderRefs, safety_boundary/8) ):
                 # Both structures IMAGE_BOUND_IMPORT_DESCRIPTOR and
                 # IMAGE_BOUND_FORWARDER_REF have the same size.
                 bnd_frwd_ref = self.__unpack_data__(
@@ -2358,9 +2385,17 @@ class PE:
                 offset = start+bnd_frwd_ref.OffsetModuleName
                 name_str =  self.get_string_from_data(
                     0, self.__data__[offset : offset + MAX_STRING_LENGTH])
-                
-                if not name_str:
-                    break
+
+                # OffsetModuleName points to a DLL name. These shouldn't be too long.
+                # Anything longer than a safety length of 128 will be taken to indicate
+                # a corrupt entry and abort the processing of these entries.
+                # Names shorted than 4 characters will be taken as invalid as well.
+
+                if name_str:
+                    invalid_chars = [c for c in name_str if c not in string.printable]
+                    if len(name_str) > 256 or len(name_str) < 4 or invalid_chars:
+                        break
+
                 forwarder_refs.append(BoundImportRefData(
                     struct = bnd_frwd_ref,
                     name = name_str))
@@ -2369,6 +2404,11 @@ class PE:
             name_str = self.get_string_from_data(
                 0, self.__data__[offset : offset + MAX_STRING_LENGTH])
             
+            if name_str:
+                invalid_chars = [c for c in name_str if c not in string.printable]
+                if len(name_str) > 256 or len(name_str) < 4 or invalid_chars:
+                    break
+
             if not name_str:
                 break
             bound_imports.append(
@@ -3220,8 +3260,16 @@ class PE:
         
         max_failed_entries_before_giving_up = 10
         
-        for i in xrange( min( export_dir.NumberOfNames, length_until_eof(export_dir.AddressOfNames)/4) ):
+        section = self.get_section_by_rva(export_dir.AddressOfNames)
+        if not section:
+            self.__warnings.append(
+                'RVA AddressOfNames in the export directory points to an invalid address: %x' %
+                export_dir.AddressOfNames)
+            return
+        else:
+            safety_boundary = section.VirtualAddress + len(section.get_data()) - export_dir.AddressOfNames
             
+        for i in xrange( min( export_dir.NumberOfNames, safety_boundary/4) ):
             symbol_name_address = self.get_dword_from_data(address_of_names, i)
 
             if symbol_name_address is None:
@@ -3282,8 +3330,19 @@ class PE:
         ordinals = [exp.ordinal for exp in exports]
         
         max_failed_entries_before_giving_up = 10
+
+        section = self.get_section_by_rva(export_dir.AddressOfFunctions)
+        if not section:
+            self.__warnings.append(
+                'RVA AddressOfFunctions in the export directory points to an invalid address: %x' %
+                export_dir.AddressOfFunctions)
+            return
+        else:
+            safety_boundary = section.VirtualAddress + len(section.get_data()) - export_dir.AddressOfFunctions
+            
+        safety_boundary = section.VirtualAddress + len(section.get_data()) - export_dir.AddressOfFunctions
         
-        for idx in xrange( min(export_dir.NumberOfFunctions, length_until_eof(export_dir.AddressOfFunctions)/4) ):
+        for idx in xrange( min(export_dir.NumberOfFunctions, safety_boundary/4) ):
             
             if not idx+export_dir.Base in ordinals:
                 try:
@@ -3694,7 +3753,7 @@ class PE:
             
         # Collect all sections in one code block
         #mapped_data = self.header
-        mapped_data = ''+ self.__data__[:]
+        mapped_data = '' + self.__data__[:]
         for section in self.sections:
             
             # Miscellaneous integrity tests.
