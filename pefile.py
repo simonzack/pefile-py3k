@@ -2149,7 +2149,7 @@ class PE:
 			section.set_file_offset(section_offset)
 			section_data = self.__data__[section_offset : section_offset + section.sizeof()]
 			# Check if the section is all nulls and stop if so.
-			if section_data.count('\0') == section.sizeof():
+			if section_data.count(b'\0') == section.sizeof():
 				self.__warnings.append(
 					('Invalid section %d. ' % i) +
 					'Contents are null-bytes.')
@@ -2342,7 +2342,7 @@ class PE:
 
 			forwarder_refs = []
 			# 8 is the size of __IMAGE_BOUND_IMPORT_DESCRIPTOR_format__
-			for idx in xrange( min( bnd_descr.NumberOfModuleForwarderRefs, safety_boundary/8) ):
+			for idx in range( min( bnd_descr.NumberOfModuleForwarderRefs, safety_boundary//8) ):
 				# Both structures IMAGE_BOUND_IMPORT_DESCRIPTOR and
 				# IMAGE_BOUND_FORWARDER_REF have the same size.
 				bnd_frwd_ref = self.__unpack_data__(
@@ -2367,7 +2367,7 @@ class PE:
 				if name_str:
 					invalid_chars = [c for c in name_str if c not in string.printable]
 					if len(name_str) > 256 or len(name_str) < 4 or invalid_chars:
-					break
+						break
 
 				forwarder_refs.append(BoundImportRefData(
 					struct = bnd_frwd_ref,
@@ -2657,7 +2657,7 @@ class PE:
 			entry_name = None
 			entry_id = None
 
-			name_is_string = (res.Name & 0x80000000L) >> 31
+			name_is_string = (res.Name & 0x80000000) >> 31
 			if not name_is_string:
 				entry_id = res.Name
 			else:
@@ -3258,7 +3258,7 @@ class PE:
 		else:
 			safety_boundary = section.VirtualAddress + len(section.get_data()) - export_dir.AddressOfNames
 
-		for i in xrange( min( export_dir.NumberOfNames, safety_boundary/4) ):
+		for i in range( min( export_dir.NumberOfNames, safety_boundary//4) ):
 			symbol_name_address = self.get_dword_from_data(address_of_names, i)
 
 			if symbol_name_address is None:
@@ -3331,7 +3331,7 @@ class PE:
 
 		safety_boundary = section.VirtualAddress + len(section.get_data()) - export_dir.AddressOfFunctions
 
-		for idx in xrange( min(export_dir.NumberOfFunctions, safety_boundary/4) ):
+		for idx in range( min(export_dir.NumberOfFunctions, safety_boundary//4) ):
 
 			if not idx+export_dir.Base in ordinals:
 				try:
