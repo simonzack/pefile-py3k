@@ -2109,50 +2109,8 @@ class PE:
 			sr.write(struct_data)
 		
 		sr.seek(0)
-        
-        if hasattr(self, 'VS_VERSIONINFO'):
-            if hasattr(self, 'FileInfo'):
-                for entry in self.FileInfo:
-                    if hasattr(entry, 'StringTable'):
-                        for st_entry in entry.StringTable:
-                            for key, entry in st_entry.entries.items():
-                                
-                                offsets = st_entry.entries_offsets[key]
-                                lengths = st_entry.entries_lengths[key]
-                                
-                                if len( entry ) > lengths[1]:
-                                    
-                                    l = list()
-                                    for idx, c in enumerate(entry):
-                                        if ord(c) > 256:
-                                            l.extend( [ chr(ord(c) & 0xff), chr( (ord(c) & 0xff00) >>8) ]  )
-                                        else:
-                                            l.extend( [chr( ord(c) ), '\0'] )
-                                    
-                                    file_data[
-                                        offsets[1] : offsets[1] + lengths[1]*2 ] = l
-                                
-                                else:
-                                    
-                                    l = list()
-                                    for idx, c in enumerate(entry):
-                                        if ord(c) > 256:
-                                            l.extend( [ chr(ord(c) & 0xff), chr( (ord(c) & 0xff00) >>8) ]  )
-                                        else:
-                                            l.extend( [chr( ord(c) ), '\0'] )
-
-                                    file_data[
-                                        offsets[1] : offsets[1] + len(entry)*2 ] = l
-                                    
-                                    remainder = lengths[1] - len(entry)
-                                    file_data[
-                                        offsets[1] + len(entry)*2 :
-                                        offsets[1] + lengths[1]*2 ] = [
-                                            u'\0' ] * remainder*2
-                
-        new_file_data = ''.join( [ chr(ord(c)) for c in file_data] )
-        
-        if filename:
+		
+		if filename:
 			f=open(filename, 'wb')
 			f.write(sr.read())
 			f.close()
